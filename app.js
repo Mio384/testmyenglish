@@ -18,6 +18,8 @@ let page = 'home'
 let index = 0
 let reviewFilter = 'all'
 let answers = loadAnswers()
+let selectedQuestionCount = loadSelectedQuestionCount()
+let activeQuestions = [...questions]
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, char => ({
@@ -40,6 +42,36 @@ function loadAnswers() {
   } catch {
     return {}
   }
+}
+
+function loadSelectedQuestionCount() {
+  try {
+    const saved = Number(localStorage.getItem('tme.questionCount'))
+    return [10, 20, 25, 50, 100].includes(saved) ? saved : 25
+  } catch {
+    return 25
+  }
+}
+
+function selectAssessmentQuestions(count) {
+  const shuffledByLevel = levels.map(level => {
+    const matching = questions.filter(question => question.level === level)
+    for (let i = matching.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[matching[i], matching[j]] = [matching[j], matching[i]]
+    }
+    return matching
+  })
+
+  const selected = []
+  while (selected.length < count) {
+    for (const levelQuestions of shuffledByLevel) {
+      if (selected.length >= count) break
+      const next = levelQuestions.find(question => !selected.includes(question))
+      if (next) selected.push(next)
+    }
+  }
+  return selected
 }
 
 function saveAnswers() {
@@ -67,7 +99,7 @@ function classify() {
   let weightedCorrect = 0
   let weightedTotal = 0
 
-  for (const question of questions) {
+  for (const question of activeQuestions) {
     const weight = levels.indexOf(question.level) + 1
     levelScores[question.level].total++
     weightedTotal += weight
@@ -94,12 +126,12 @@ function classify() {
   })
   if (!consistent && level !== 'A1') level = levels[Math.max(0, levels.indexOf(level) - 1)]
 
-  const correct = questions.filter(question => answers[question.id] === question.answer).length
-  const unanswered = questions.filter(question => answers[question.id] === undefined).length
+  const correct = activeQuestions.filter(question => answers[question.id] === question.answer).length
+  const unanswered = activeQuestions.filter(question => answers[question.id] === undefined).length
   return {
     level,
     correct,
-    incorrect: questions.length - correct - unanswered,
+    incorrect: activeQuestions.length - correct - unanswered,
     unanswered,
     weighted: Math.round(raw * 100),
     categoryScores,
@@ -127,8 +159,8 @@ function homePage() {
     <section class="hero-copy">
       <div class="eyebrow"><span></span> CEFR-aligned English assessment</div>
       <h1>How good is<br><em>your English?</em></h1>
-      <p>Discover your estimated proficiency level with a thoughtful, ${questions.length}-question assessment and a detailed learning report.</p>
-      <div class="hero-actions"><button class="primary" data-action="instructions">Start my assessment <span>→</span></button><div class="test-meta"><b>~25 min</b><span>${questions.length} questions</span></div></div>
+      <p>Discover your estimated proficiency level with a thoughtful, ${questions.length}-question bank and a detailed learning report.</p>
+      <div class="hero-actions"><button class="primary" data-action="instructions">Start my assessment <span>→</span></button><div class="test-meta"><b>${selectedQuestionCount === 100 ? '~50 min' : `~${Math.ceil(selectedQuestionCount / 2)} min`}</b><span>${selectedQuestionCount} questions selected</span></div></div>
     </section>
     <section class="hero-visual" aria-label="Assessment preview">
       <div class="visual-card card-back"></div>
@@ -141,6 +173,9 @@ function homePage() {
 }
 
 function instructionsPage() {
+  const countOptions = [10, 20, 25, 50, 100].map(count =>
+    `<option value="${count}" ${count === selectedQuestionCount ? 'selected' : ''}>${count} questions</option>`
+  ).join('')
   return `<main class="instructions-page">
     <div class="section-heading"><div class="eyebrow"><span></span> Before you begin</div><h1>Take a moment to<br><em>get ready.</em></h1></div>
     <div class="instruction-grid">
@@ -148,15 +183,19 @@ function instructionsPage() {
       <section class="instruction-card"><span class="step-number">02</span><h2>Choose the best answer</h2><p>Each question has four choices. Select one answer before moving to the next question.</p></section>
       <section class="instruction-card"><span class="step-number">03</span><h2>Review your report</h2><p>Receive an estimated CEFR level, competency breakdown, explanations, and a learning path.</p></section>
     </div>
+    <div class="question-count-setting">
+      <div><b>Number of questions</b><p>Choose how many questions you want to take.</p></div>
+      <label><span class="sr-only">Number of questions</span><select id="question-count" aria-label="Number of questions">${countOptions}</select></label>
+    </div>
     <div class="notice"><b>Important:</b> This independent assessment estimates reading and language knowledge only. It does not assess speaking or listening and is not an official exam.</div>
     <div class="start-row"><button class="secondary" data-action="home">Back</button><button class="primary" data-action="begin">Begin assessment <span>→</span></button></div>
   </main>`
 }
 
 function assessmentPage() {
-  const question = questions[index]
+  const question = activeQuestions[index]
   const answeredCount = Object.keys(answers).length
-  const progress = Math.round(answeredCount / questions.length * 100)
+  const progress = Math.round(answeredCount / activeQuestions.length * 100)
   const choices = question.choices.map((choice, choiceIndex) => {
     const selected = answers[question.id] === choiceIndex
     return `<button type="button" role="radio" aria-checked="${selected}" class="choice${selected ? ' selected' : ''}" data-action="answer" data-choice="${choiceIndex}">
@@ -166,14 +205,14 @@ function assessmentPage() {
   const passage = question.passage
     ? `<div class="passage"><b>Read the passage</b><p>${escapeHtml(question.passage)}</p></div>`
     : ''
-  const nextButton = index < questions.length - 1
+  const nextButton = index < activeQuestions.length - 1
     ? `<button class="primary" data-action="next">${answers[question.id] === undefined ? 'Skip for now' : 'Next'} <span>→</span></button>`
     : '<button class="primary" data-action="submit">Review &amp; submit <span>→</span></button>'
 
   return `<main class="assessment-page">
     <header class="assessment-header">
       <button class="brand" data-action="home" aria-label="TestMyEnglish home">${brand()}</button>
-      <div class="assessment-progress"><div><b>Question ${index + 1} of ${questions.length}</b><span>${progress}% completed</span></div><div class="progress-track"><span style="width:${(index + 1) / questions.length * 100}%"></span></div></div>
+      <div class="assessment-progress"><div><b>Question ${index + 1} of ${activeQuestions.length}</b><span>${progress}% completed</span></div><div class="progress-track"><span style="width:${(index + 1) / activeQuestions.length * 100}%"></span></div></div>
       <button class="exit-button" data-action="home">Exit</button>
     </header>
     <section class="question-wrap">
@@ -190,7 +229,7 @@ function completionPage() {
   return `<main class="complete-page">
     <div class="completion-icon">✓</div><div class="eyebrow"><span></span> Assessment complete</div>
     <h1>Your English report<br><em>is ready.</em></h1>
-    <p>You answered ${Object.keys(answers).length} of ${questions.length} questions. Your estimated level has been calculated from difficulty, competency, and consistency.</p>
+    <p>You answered ${activeQuestions.filter(question => answers[question.id] !== undefined).length} of ${activeQuestions.length} questions. Your estimated level has been calculated from difficulty, competency, and consistency.</p>
     <button class="primary" data-action="results">View my results <span>→</span></button>
   </main>`
 }
@@ -213,7 +252,7 @@ function resultsPage() {
     <div class="results-hero"><div><div class="eyebrow"><span></span> Your estimated proficiency</div><h1>Congratulations!</h1><p>You’ve completed your English assessment.</p></div>
       <div class="result-badge"><b>${result.level}</b><span>${levelInfo[result.level].name}</span></div>
     </div>
-    <div class="stats-row"><div><span>Correct</span><b>${result.correct}<small> / ${questions.length}</small></b></div><div><span>Incorrect</span><b>${result.incorrect}</b></div><div><span>Unanswered</span><b>${result.unanswered}</b></div><div><span>Weighted score</span><b>${result.weighted}%</b></div></div>
+    <div class="stats-row"><div><span>Correct</span><b>${result.correct}<small> / ${activeQuestions.length}</small></b></div><div><span>Incorrect</span><b>${result.incorrect}</b></div><div><span>Unanswered</span><b>${result.unanswered}</b></div><div><span>Weighted score</span><b>${result.weighted}%</b></div></div>
     <section class="level-summary"><div><span class="level-letter">${result.level}</span></div><div><h2>${levelInfo[result.level].name}</h2><p>${levelInfo[result.level].description}</p></div></section>
     <section class="report-section"><div class="report-title"><div><div class="eyebrow"><span></span> Performance breakdown</div><h2>Where you stand</h2></div></div><div class="category-grid">${categoryCards}</div></section>
     <section class="learning-section">
@@ -234,7 +273,7 @@ function resultsPage() {
 }
 
 function renderReviews() {
-  return questions.filter(question => {
+  return activeQuestions.filter(question => {
     if (reviewFilter === 'correct') return answers[question.id] === question.answer
     if (reviewFilter === 'incorrect') return answers[question.id] !== undefined && answers[question.id] !== question.answer
     if (reviewFilter === 'unanswered') return answers[question.id] === undefined
@@ -278,10 +317,15 @@ root.addEventListener('click', event => {
       navigate('instructions')
       break
     case 'begin':
+      activeQuestions = selectAssessmentQuestions(selectedQuestionCount)
+      answers = {}
+      index = 0
+      reviewFilter = 'all'
+      saveAnswers()
       navigate('assessment')
       break
     case 'answer':
-      answers[questions[index].id] = Number(button.dataset.choice)
+      answers[activeQuestions[index].id] = Number(button.dataset.choice)
       saveAnswers()
       render()
       break
@@ -290,7 +334,7 @@ root.addEventListener('click', event => {
       render()
       break
     case 'next':
-      index = Math.min(questions.length - 1, index + 1)
+      index = Math.min(activeQuestions.length - 1, index + 1)
       render()
       break
     case 'submit':
@@ -307,10 +351,24 @@ root.addEventListener('click', event => {
       answers = {}
       index = 0
       reviewFilter = 'all'
+      activeQuestions = selectAssessmentQuestions(selectedQuestionCount)
       saveAnswers()
       navigate('assessment')
       break
   }
+})
+
+root.addEventListener('change', event => {
+  if (event.target.id !== 'question-count') return
+  const count = Number(event.target.value)
+  if (![10, 20, 25, 50, 100].includes(count)) return
+  selectedQuestionCount = count
+  try {
+    localStorage.setItem('tme.questionCount', String(count))
+  } catch {
+    // The selection remains usable for this visit when browser storage is unavailable.
+  }
+  render()
 })
 
 render()
